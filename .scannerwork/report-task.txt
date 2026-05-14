@@ -1,0 +1,7 @@
+organization=kroos2211
+projectKey=kroos2211_testsonar
+serverUrl=https://sonarcloud.io
+serverVersion=8.0.0.87066
+dashboardUrl=https://sonarcloud.io/dashboard?id=kroos2211_testsonar
+ceTaskId=AZ4XZIC10UEsDVJn0CSP
+ceTaskUrl=https://sonarcloud.io/api/ce/task?id=AZ4XZIC10UEsDVJn0CSP

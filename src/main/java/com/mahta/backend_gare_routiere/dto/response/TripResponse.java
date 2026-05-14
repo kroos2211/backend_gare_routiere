@@ -26,6 +26,10 @@ public class TripResponse {
 
     private LocalDateTime arrivalTime;
 
+    private LocalDateTime segmentDepartureTime;
+
+    private LocalDateTime segmentArrivalTime;
+
     private double price;
 
     private int availableSeats;

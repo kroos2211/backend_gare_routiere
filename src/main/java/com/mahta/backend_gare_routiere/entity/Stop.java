@@ -29,6 +29,12 @@ public class Stop {
 
     private LocalDateTime actualTime;
 
+    @Column(nullable = false)
+    private boolean validated = false;
+
+    @Column(nullable = false)
+    private Double segmentPrice = 0.0;
+
     @JsonIgnore
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "trip_id", nullable = false)

@@ -39,6 +39,23 @@ public class TripService {
                 stopRepository.findByTripIdOrderByOrderIndex(tripId);
 
         LocalDateTime now = LocalDateTime.now();
+        boolean hasValidatedStop =
+                stops.stream().anyMatch(Stop::isValidated);
+
+        if (now.isBefore(trip.getDepartureTime())
+                && !hasValidatedStop) {
+            String nextCity = stops.isEmpty()
+                    ? trip.getArrivalCity()
+                    : stops.get(0).getCity();
+
+            return new TripTrackingResponse(
+                    0,
+                    trip.getDepartureCity(),
+                    nextCity,
+                    0,
+                    "NOT_STARTED"
+            );
+        }
 
         /*
          * =========================
@@ -103,15 +120,13 @@ public class TripService {
 
         for (Stop stop : stops) {
 
-            LocalDateTime time =
-                    stop.getActualTime() != null
-                            ? stop.getActualTime()
-                            : stop.getScheduledTime();
+            if (stop.isValidated()) {
 
-            if (time.isBefore(now)) {
                 passed++;
                 current = stop;
+
             } else {
+
                 next = stop;
                 break;
             }
@@ -128,6 +143,8 @@ public class TripService {
                     current.getScheduledTime(),
                     current.getActualTime()
             ).toMinutes();
+
+            delay = Math.max(delay, 0);
         }
 
         String status;
@@ -144,7 +161,7 @@ public class TripService {
 
             return new TripTrackingResponse(
                     100,
-                    stops.get(stops.size() - 1).getCity(),
+                    trip.getArrivalCity(),
                     "ARRIVED",
                     delay,
                     "ARRIVED"
@@ -156,20 +173,20 @@ public class TripService {
 
         if (current == null) {
 
-            currentCity = stops.get(0).getCity();
+            currentCity = trip.getDepartureCity();
 
-            nextCity = stops.size() > 1
-                    ? stops.get(1).getCity()
-                    : stops.get(0).getCity();
+            nextCity = stops.get(0).getCity();
 
         } else if (next != null) {
 
             currentCity = current.getCity();
+
             nextCity = next.getCity();
 
         } else {
 
-            currentCity = stops.get(stops.size() - 1).getCity();
+            currentCity = trip.getArrivalCity();
+
             nextCity = "ARRIVED";
         }
 
@@ -200,14 +217,23 @@ public class TripService {
             start = now;
         }
 
-        List<Trip> trips =
-                tripRepository.findByDepartureCityAndArrivalCityAndDepartureTimeBetween(
-                        req.getDepartureCity(),
-                        req.getArrivalCity(),
+        List<Trip> allTrips =
+                tripRepository.findByDepartureTimeBetween(
                         start,
                         end
                 );
 
+        List<Trip> trips = new ArrayList<>(
+                allTrips.stream()
+                        .filter(trip ->
+                                isTripMatching(
+                                        trip,
+                                        req.getDepartureCity(),
+                                        req.getArrivalCity()
+                                )
+                        )
+                        .toList()
+        );
         applySorting(req, trips);
 
         if (trips.isEmpty()) {
@@ -219,17 +245,28 @@ public class TripService {
         }
 
         return trips.stream()
-                .map(this::mapTripResponse)
+                .map(trip ->
+                        mapTripResponse(
+                                trip,
+                                req.getDepartureCity(),
+                                req.getArrivalCity()
+                        )
+                )
                 .toList();
     }
 
-    public TripResponse getTripById(Long id) {
+    public TripResponse getTripById(
+            Long id,
+            String boardingCity,
+            String dropoffCity
+    ) {
 
         Trip trip = tripRepository.findById(id)
                 .orElseThrow(() -> new ResponseStatusException(
                         HttpStatus.NOT_FOUND,
                         "Trip not found"
                 ));
+
         if (trip.getDepartureTime().isBefore(LocalDateTime.now())) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,
@@ -237,7 +274,21 @@ public class TripService {
             );
         }
 
-        return mapTripResponse(trip);
+        String effectiveDeparture =
+                boardingCity != null && !boardingCity.isBlank()
+                        ? boardingCity
+                        : trip.getDepartureCity();
+
+        String effectiveArrival =
+                dropoffCity != null && !dropoffCity.isBlank()
+                        ? dropoffCity
+                        : trip.getArrivalCity();
+
+        return mapTripResponse(
+                trip,
+                effectiveDeparture,
+                effectiveArrival
+        );
     }
 
     private void applySorting(
@@ -345,7 +396,11 @@ public class TripService {
                 .orElse(null);
     }
 
-    private TripResponse mapTripResponse(Trip trip) {
+    private TripResponse mapTripResponse(
+            Trip trip,
+            String requestedDeparture,
+            String requestedArrival
+    ) {
 
         int availableSeats = getRealAvailableSeats(trip);
 
@@ -355,15 +410,38 @@ public class TripService {
             nextTrip = findNextAvailableTrip(trip);
         }
 
+        double segmentPrice =
+                calculateSegmentPrice(
+                        trip,
+                        requestedDeparture,
+                        requestedArrival
+                );
+
         return TripResponse.builder()
                 .id(trip.getId())
-                .departureCity(trip.getDepartureCity())
-                .arrivalCity(trip.getArrivalCity())
+
+                .departureCity(requestedDeparture)
+
+                .arrivalCity(requestedArrival)
+
                 .departureTime(trip.getDepartureTime())
+
                 .arrivalTime(trip.getArrivalTime())
-                .price(calculateDynamicPrice(trip))
+
+                .segmentDepartureTime(
+                        resolveSegmentDepartureTime(trip, requestedDeparture)
+                )
+
+                .segmentArrivalTime(
+                        resolveSegmentArrivalTime(trip, requestedArrival)
+                )
+
+                .price(segmentPrice)
+
                 .availableSeats(availableSeats)
+
                 .isFull(availableSeats == 0)
+
                 .nextAvailableTrip(
                         nextTrip == null
                                 ? null
@@ -438,5 +516,125 @@ public class TripService {
         return seatRepository
                 .findByTripIdAndAvailableTrue(trip.getId())
                 .size();
+    }
+    private boolean isTripMatching(
+            Trip trip,
+            String departure,
+            String arrival
+    ) {
+
+        List<String> route = new ArrayList<>();
+
+        route.add(trip.getDepartureCity());
+
+        List<Stop> stops =
+                stopRepository.findByTripIdOrderByOrderIndex(
+                        trip.getId()
+                );
+
+        for (Stop stop : stops) {
+            route.add(stop.getCity());
+        }
+
+        route.add(trip.getArrivalCity());
+
+        int departureIndex = route.indexOf(departure);
+        int arrivalIndex = route.indexOf(arrival);
+
+        return departureIndex != -1
+                && arrivalIndex != -1
+                && departureIndex < arrivalIndex;
+    }
+    private double calculateSegmentPrice(
+            Trip trip,
+            String departure,
+            String arrival
+    ) {
+
+        List<String> cities = new ArrayList<>();
+
+        cities.add(trip.getDepartureCity());
+
+        List<Stop> stops =
+                stopRepository.findByTripIdOrderByOrderIndex(
+                        trip.getId()
+                );
+
+        for (Stop stop : stops) {
+            cities.add(stop.getCity());
+        }
+
+        cities.add(trip.getArrivalCity());
+
+        int departureIndex = cities.indexOf(departure);
+        int arrivalIndex = cities.indexOf(arrival);
+
+        double total = 0;
+
+        for (int i = departureIndex + 1; i <= arrivalIndex; i++) {
+
+            String city = cities.get(i);
+
+            Stop stop = stops.stream()
+                    .filter(s -> s.getCity().equals(city))
+                    .findFirst()
+                    .orElse(null);
+
+            if (stop != null) {
+
+                total += stop.getSegmentPrice();
+
+            } else {
+
+                double remaining =
+                        trip.getPrice()
+                                - stops.stream()
+                                .mapToDouble(Stop::getSegmentPrice)
+                                .sum();
+
+                total += remaining;
+            }
+        }
+
+        total = applyTimeFactor(trip, total);
+
+        total = applyDemandFactor(trip, total);
+
+        return Math.round(total * 100.0) / 100.0;
+    }
+    private LocalDateTime resolveSegmentDepartureTime(
+            Trip trip,
+            String city
+    ) {
+
+        if (city.equals(trip.getDepartureCity())) {
+            return trip.getDepartureTime();
+        }
+
+        return stopRepository
+                .findByTripIdOrderByOrderIndex(trip.getId())
+                .stream()
+                .filter(stop -> stop.getCity().equals(city))
+                .findFirst()
+                .map(Stop::getScheduledTime)
+                .orElse(trip.getDepartureTime());
+    }
+
+    private LocalDateTime resolveSegmentArrivalTime(
+            Trip trip,
+            String city
+    ) {
+
+        if (city.equals(trip.getArrivalCity())) {
+            return trip.getArrivalTime();
+        }
+
+        return stopRepository
+                .findByTripIdOrderByOrderIndex(trip.getId())
+                .stream()
+                .filter(stop -> stop.getCity().equals(city))
+                .findFirst()
+                .map(Stop::getScheduledTime)
+                .orElse(trip.getArrivalTime());
     }
 }

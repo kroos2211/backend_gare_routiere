@@ -16,24 +16,20 @@ public class PromoService {
     private final PromoCodeRepository promoRepository;
 
     public double applyPromo(String code, double price) {
-        return applyPromoInternal(code, price, true);
+        return applyPromoInternal(code, price);
     }
 
     public double previewPromo(String code, double price) {
-        return applyPromoInternal(code, price, false);
+        return applyPromoInternal(code, price);
     }
 
-    private double applyPromoInternal(
-            String code,
-            double price,
-            boolean consume
-    ) {
+    private double applyPromoInternal(String code, double price) {
 
         if (code == null || code.isBlank()) {
             return price;
         }
 
-        PromoCode promo = promoRepository.findByCode(code)
+        PromoCode promo = promoRepository.findByCode(code.trim().toUpperCase())
                 .orElseThrow(() -> new ResponseStatusException(
                         HttpStatus.NOT_FOUND,
                         "Invalid promo code"
@@ -55,30 +51,13 @@ public class PromoService {
 
         double finalPrice;
 
-        if (
-                promo.getFixedAmount() != null
-                        && promo.getFixedAmount() > 0
-        ) {
-
-            finalPrice = Math.max(
-                    0,
-                    price - promo.getFixedAmount()
-            );
-
+        if (promo.getFixedAmount() != null && promo.getFixedAmount() > 0) {
+            finalPrice = Math.max(0, price - promo.getFixedAmount());
         } else {
-
-            finalPrice = price - (
-                    price * promo.getDiscountPercentage() / 100.0
-            );
-
+            finalPrice = price - (price * promo.getDiscountPercentage() / 100.0);
             finalPrice = Math.max(0, finalPrice);
         }
 
-        if (consume) {
-            promo.setActive(false);
-            promoRepository.save(promo);
-        }
-
-        return finalPrice;
+        return Math.round(finalPrice * 100.0) / 100.0;
     }
 }

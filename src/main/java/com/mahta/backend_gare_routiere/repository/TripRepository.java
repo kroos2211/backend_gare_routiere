@@ -7,6 +7,7 @@ import org.springframework.stereotype.Repository;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 
 @Repository
 public interface TripRepository extends JpaRepository<Trip, Long> {
@@ -29,4 +30,16 @@ public interface TripRepository extends JpaRepository<Trip, Long> {
             String departureCity,
             LocalDateTime time
     );
+
+    List<Trip> findByDriverIdAndDepartureTimeBetweenOrderByDepartureTimeAsc(
+            UUID driverId,
+            LocalDateTime start,
+            LocalDateTime end
+    );
+
+    List<Trip> findByDepartureTimeBetween(
+            LocalDateTime start,
+            LocalDateTime end
+    );
+    List<Trip> findByDriverIdOrderByDepartureTimeDesc(UUID driverId);
 }

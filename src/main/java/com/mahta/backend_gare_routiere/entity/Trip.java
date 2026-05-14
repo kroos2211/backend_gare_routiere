@@ -35,6 +35,13 @@ public class Trip extends BaseEntity {
     @Column(nullable = false)
     private int capacity = 50;
 
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "driver_id")
+    private User driver;
+
+    @Column(nullable = false, length = 30)
+    private String status = "SCHEDULED";
+
     @OneToMany(
             mappedBy = "trip",
             cascade = CascadeType.ALL,

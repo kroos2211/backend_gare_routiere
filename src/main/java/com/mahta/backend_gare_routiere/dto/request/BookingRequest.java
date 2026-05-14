@@ -7,26 +7,59 @@ import lombok.Data;
 @Data
 public class BookingRequest {
 
+    /*
+     * =========================
+     * TRAJET
+     * =========================
+     */
+
     @NotNull
     private Long tripId;
 
     @NotBlank
-    private String category;
+    private String boardingCity;
+
+    @NotBlank
+    private String dropoffCity;
+
+    /*
+     * =========================
+     * SIÈGE
+     * =========================
+     */
 
     @NotBlank
     private String seatNumber;
+
+    @NotBlank
+    private String seatType;
+
+    /*
+     * =========================
+     * TARIFICATION
+     * =========================
+     */
+
+    @NotBlank
+    private String tariffCategory;
+
+    /*
+     * =========================
+     * OPTIONS
+     * =========================
+     */
 
     private boolean hasBagage;
 
     private boolean prioritySeat;
 
-    private String promoCode;
-
-    @NotBlank
-    private String tariffCategory;
-
-    @NotBlank
-    private String seatType;
-
     private boolean baby;
+
+    /*
+     * =========================
+     * PROMO
+     * =========================
+     */
+
+    private String promoCode;
 }

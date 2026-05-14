@@ -10,6 +10,7 @@ import com.itextpdf.kernel.colors.DeviceRgb;
 import com.itextpdf.kernel.geom.PageSize;
 import com.itextpdf.kernel.pdf.PdfDocument;
 import com.itextpdf.kernel.pdf.PdfWriter;
+import com.itextpdf.kernel.pdf.canvas.draw.SolidLine;
 import com.itextpdf.layout.Document;
 import com.itextpdf.layout.borders.SolidBorder;
 import com.itextpdf.layout.element.Cell;
@@ -20,12 +21,13 @@ import com.itextpdf.layout.element.Table;
 import com.itextpdf.layout.properties.TextAlignment;
 import com.itextpdf.layout.properties.UnitValue;
 import com.mahta.backend_gare_routiere.entity.Booking;
+import com.mahta.backend_gare_routiere.entity.Stop;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
 import java.io.ByteArrayOutputStream;
+import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
-import com.itextpdf.kernel.pdf.canvas.draw.SolidLine;
 
 @Service
 @RequiredArgsConstructor
@@ -51,9 +53,12 @@ public class PdfService {
             DateTimeFormatter dateFormatter =
                     DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm");
 
-            // =========================
-            // HEADER
-            // =========================
+            String boardingCity = resolveBoardingCity(booking);
+            String dropoffCity = resolveDropoffCity(booking);
+
+            LocalDateTime boardingTime = resolveDepartureTime(booking);
+            LocalDateTime dropoffTime = resolveArrivalTime(booking);
+
             Table header = new Table(UnitValue.createPercentArray(new float[]{2, 1}));
             header.setWidth(UnitValue.createPercentValue(100));
 
@@ -90,12 +95,8 @@ public class PdfService {
             header.addCell(statusCell);
 
             document.add(header);
-
             document.add(new Paragraph("\n"));
 
-            // =========================
-            // ROUTE CARD
-            // =========================
             Table routeCard = new Table(UnitValue.createPercentArray(new float[]{1, 0.25f, 1}));
             routeCard.setWidth(UnitValue.createPercentValue(100));
             routeCard.setBackgroundColor(LIGHT_BG);
@@ -110,14 +111,12 @@ public class PdfService {
                     .setBold()
                     .setFontColor(MUTED));
 
-            fromCell.add(new Paragraph(booking.getTrip().getDepartureCity())
+            fromCell.add(new Paragraph(boardingCity)
                     .setFontSize(26)
                     .setBold()
                     .setFontColor(DARK));
 
-            fromCell.add(new Paragraph(
-                    booking.getTrip().getDepartureTime().format(dateFormatter)
-            )
+            fromCell.add(new Paragraph(boardingTime.format(dateFormatter))
                     .setFontSize(11)
                     .setFontColor(MUTED));
 
@@ -141,14 +140,12 @@ public class PdfService {
                     .setBold()
                     .setFontColor(MUTED));
 
-            toCell.add(new Paragraph(booking.getTrip().getArrivalCity())
+            toCell.add(new Paragraph(dropoffCity)
                     .setFontSize(26)
                     .setBold()
                     .setFontColor(DARK));
 
-            toCell.add(new Paragraph(
-                    booking.getTrip().getArrivalTime().format(dateFormatter)
-            )
+            toCell.add(new Paragraph(dropoffTime.format(dateFormatter))
                     .setFontSize(11)
                     .setFontColor(MUTED));
 
@@ -157,12 +154,8 @@ public class PdfService {
             routeCard.addCell(toCell);
 
             document.add(routeCard);
-
             document.add(new Paragraph("\n"));
 
-            // =========================
-            // DETAILS + QR
-            // =========================
             String data = "BOOKING_ID:" + booking.getId();
             String signature = qrSecurityService.generateSignature(data);
             String qrContent = data + "|SIGN:" + signature;
@@ -195,6 +188,22 @@ public class PdfService {
                     .setFontColor(DARK));
 
             infoCell.add(new Paragraph("Client : " + booking.getUser().getEmail())
+                    .setFontSize(12)
+                    .setFontColor(DARK));
+
+            infoCell.add(new Paragraph("Montée : " + boardingCity)
+                    .setFontSize(12)
+                    .setFontColor(DARK));
+
+            infoCell.add(new Paragraph("Descente : " + dropoffCity)
+                    .setFontSize(12)
+                    .setFontColor(DARK));
+
+            infoCell.add(new Paragraph("Heure montée : " + boardingTime.format(dateFormatter))
+                    .setFontSize(12)
+                    .setFontColor(DARK));
+
+            infoCell.add(new Paragraph("Heure descente : " + dropoffTime.format(dateFormatter))
                     .setFontSize(12)
                     .setFontColor(DARK));
 
@@ -231,12 +240,8 @@ public class PdfService {
             mainInfo.addCell(qrCell);
 
             document.add(mainInfo);
-
             document.add(new Paragraph("\n"));
 
-            // =========================
-            // OPTIONS
-            // =========================
             Table options = new Table(UnitValue.createPercentArray(new float[]{1, 1, 1}));
             options.setWidth(UnitValue.createPercentValue(100));
 
@@ -245,7 +250,6 @@ public class PdfService {
             options.addCell(optionCell("Sécurité", "QR signé"));
 
             document.add(options);
-
             document.add(new Paragraph("\n"));
 
             SolidLine line = new SolidLine();
@@ -253,9 +257,6 @@ public class PdfService {
 
             document.add(new LineSeparator(line));
 
-            // =========================
-            // FOOTER
-            // =========================
             Paragraph footer = new Paragraph(
                     "Ce ticket est généré automatiquement par Ma7ta.ma. " +
                             "Le QR code est sécurisé et vérifiable une seule fois."
@@ -274,6 +275,54 @@ public class PdfService {
         } catch (Exception e) {
             throw new RuntimeException("Error generating ticket PDF", e);
         }
+    }
+
+    private String resolveBoardingCity(Booking booking) {
+        if (booking.getBoardingCity() != null && !booking.getBoardingCity().isBlank()) {
+            return booking.getBoardingCity();
+        }
+
+        return booking.getTrip().getDepartureCity();
+    }
+
+    private String resolveDropoffCity(Booking booking) {
+        if (booking.getDropoffCity() != null && !booking.getDropoffCity().isBlank()) {
+            return booking.getDropoffCity();
+        }
+
+        return booking.getTrip().getArrivalCity();
+    }
+
+    private LocalDateTime resolveDepartureTime(Booking booking) {
+        String boardingCity = resolveBoardingCity(booking);
+
+        if (boardingCity.equals(booking.getTrip().getDepartureCity())) {
+            return booking.getTrip().getDepartureTime();
+        }
+
+        return booking.getTrip()
+                .getStops()
+                .stream()
+                .filter(stop -> stop.getCity().equals(boardingCity))
+                .findFirst()
+                .map(Stop::getScheduledTime)
+                .orElse(booking.getTrip().getDepartureTime());
+    }
+
+    private LocalDateTime resolveArrivalTime(Booking booking) {
+        String dropoffCity = resolveDropoffCity(booking);
+
+        if (dropoffCity.equals(booking.getTrip().getArrivalCity())) {
+            return booking.getTrip().getArrivalTime();
+        }
+
+        return booking.getTrip()
+                .getStops()
+                .stream()
+                .filter(stop -> stop.getCity().equals(dropoffCity))
+                .findFirst()
+                .map(Stop::getScheduledTime)
+                .orElse(booking.getTrip().getArrivalTime());
     }
 
     private Cell optionCell(String label, String value) {

@@ -28,7 +28,11 @@ public class TripController {
     }
 
     @GetMapping("/{id}")
-    public TripResponse getTripById(@PathVariable Long id) {
-        return tripService.getTripById(id);
+    public TripResponse getTripById(
+            @PathVariable Long id,
+            @RequestParam(required = false) String boardingCity,
+            @RequestParam(required = false) String dropoffCity
+    ) {
+        return tripService.getTripById(id, boardingCity, dropoffCity);
     }
 }

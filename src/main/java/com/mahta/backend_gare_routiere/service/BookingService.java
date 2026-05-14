@@ -14,6 +14,7 @@ import org.springframework.web.server.ResponseStatusException;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
@@ -26,6 +27,7 @@ public class BookingService {
     private final TicketRepository ticketRepository;
     private final PromoService promoService;
     private final SeatRepository seatRepository;
+    private final StopRepository stopRepository;
     private final PdfService pdfService;
     private final EmailService emailService;
     private final PromoCodeRepository promoRepository;
@@ -38,12 +40,19 @@ public class BookingService {
                         HttpStatus.NOT_FOUND,
                         "Trip not found"
                 ));
+
         if (trip.getDepartureTime().isBefore(LocalDateTime.now())) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,
                     "Trip already departed"
             );
         }
+
+        validateRouteSegment(
+                trip,
+                req.getBoardingCity(),
+                req.getDropoffCity()
+        );
 
         Seat seat = seatRepository
                 .findByTripIdAndSeatNumber(trip.getId(), req.getSeatNumber())
@@ -72,6 +81,8 @@ public class BookingService {
 
         double price = calculatePrice(
                 trip,
+                req.getBoardingCity(),
+                req.getDropoffCity(),
                 category,
                 req.isBaby(),
                 false
@@ -82,6 +93,7 @@ public class BookingService {
         }
 
         price = promoService.applyPromo(req.getPromoCode(), price);
+        price = roundPrice(price);
 
         Booking booking = Booking.builder()
                 .trip(trip)
@@ -93,6 +105,9 @@ public class BookingService {
                 .baby(req.isBaby())
                 .pendingExtraAmount(0.0)
                 .creditAmount(0.0)
+                .boardingCity(req.getBoardingCity())
+                .dropoffCity(req.getDropoffCity())
+                .paidAmount(price)
                 .build();
 
         Booking savedBooking = bookingRepository.save(booking);
@@ -119,12 +134,19 @@ public class BookingService {
                         HttpStatus.NOT_FOUND,
                         "Trip not found"
                 ));
+
         if (trip.getDepartureTime().isBefore(LocalDateTime.now())) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,
                     "Trip already departed"
             );
         }
+
+        validateRouteSegment(
+                trip,
+                req.getBoardingCity(),
+                req.getDropoffCity()
+        );
 
         Seat seat = seatRepository
                 .findByTripIdAndSeatNumber(trip.getId(), req.getSeatNumber())
@@ -144,6 +166,8 @@ public class BookingService {
 
         double price = calculatePrice(
                 trip,
+                req.getBoardingCity(),
+                req.getDropoffCity(),
                 category,
                 req.isBaby(),
                 false
@@ -153,7 +177,9 @@ public class BookingService {
             price += 20;
         }
 
-        return promoService.previewPromo(req.getPromoCode(), price);
+        return roundPrice(
+                promoService.previewPromo(req.getPromoCode(), price)
+        );
     }
 
     @Transactional
@@ -169,6 +195,13 @@ public class BookingService {
             throw new ResponseStatusException(
                     HttpStatus.FORBIDDEN,
                     "Unauthorized"
+            );
+        }
+
+        if (booking.getTrip().getDepartureTime().isBefore(LocalDateTime.now())) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Impossible d'annuler après le début du voyage"
             );
         }
 
@@ -218,7 +251,7 @@ public class BookingService {
 
         bookingRepository.save(booking);
 
-        return refund;
+        return roundPrice(refund);
     }
 
     @Transactional
@@ -226,6 +259,8 @@ public class BookingService {
             Long bookingId,
             Long newTripId,
             String newSeatNumber,
+            String newBoardingCity,
+            String newDropoffCity,
             User user
     ) {
 
@@ -239,6 +274,13 @@ public class BookingService {
             throw new ResponseStatusException(
                     HttpStatus.FORBIDDEN,
                     "Unauthorized"
+            );
+        }
+
+        if (booking.getTrip().getDepartureTime().isBefore(LocalDateTime.now())) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Impossible de modifier après le début du voyage"
             );
         }
 
@@ -263,12 +305,19 @@ public class BookingService {
                         HttpStatus.NOT_FOUND,
                         "Trip not found"
                 ));
+
         if (newTrip.getDepartureTime().isBefore(LocalDateTime.now())) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,
                     "Trip already departed"
             );
         }
+
+        validateRouteSegment(
+                newTrip,
+                newBoardingCity,
+                newDropoffCity
+        );
 
         Ticket ticket = ticketRepository.findByBookingId(booking.getId())
                 .orElseThrow(() -> new ResponseStatusException(
@@ -307,36 +356,66 @@ public class BookingService {
             );
         }
 
-        double oldPrice = booking.getTotalPrice();
+        double oldPrice = booking.getPaidAmount();
 
         boolean modificationFee = booking.isModificationUsed();
 
         double newPrice = calculatePrice(
                 newTrip,
+                newBoardingCity,
+                newDropoffCity,
                 booking.getTariffCategory(),
                 booking.isBaby(),
                 modificationFee
         );
 
-        double difference = newPrice - oldPrice;
+        newPrice = roundPrice(newPrice);
 
-        if (!sameSeat) {
-            oldSeat.setAvailable(true);
-            seatRepository.save(oldSeat);
+        double difference = roundPrice(newPrice - oldPrice);
 
-            newSeat.setAvailable(false);
-            seatRepository.save(newSeat);
-        }
+
 
         if (!booking.isModificationUsed()) {
             booking.setModificationUsed(true);
         }
+        if (difference > 0) {
 
-        booking.setTrip(newTrip);
-        booking.setTotalPrice(newPrice);
+            booking.setPendingTrip(newTrip);
 
-        ticket.setSeatNumber(newSeatNumber);
-        ticketRepository.save(ticket);
+            booking.setPendingSeatNumber(newSeatNumber);
+
+            booking.setPendingBoardingCity(newBoardingCity);
+
+            booking.setPendingDropoffCity(newDropoffCity);
+
+            booking.setPendingTotalPrice(newPrice);
+
+        } else {
+
+            if (!sameSeat) {
+
+                oldSeat.setAvailable(true);
+                seatRepository.save(oldSeat);
+
+                newSeat.setAvailable(false);
+                seatRepository.save(newSeat);
+            }
+
+            ticket.setSeatNumber(newSeatNumber);
+            ticketRepository.save(ticket);
+
+            booking.setTrip(newTrip);
+
+            booking.setBoardingCity(newBoardingCity);
+
+            booking.setDropoffCity(newDropoffCity);
+
+            booking.setTotalPrice(newPrice);
+
+            booking.setPaidAmount(newPrice);
+        }
+
+
 
         if (difference > 0) {
             handleMoreExpensiveModification(booking, difference);
@@ -355,16 +434,27 @@ public class BookingService {
         return updatedBooking;
     }
 
+    @Transactional(readOnly = true)
     public List<Booking> getUserBookings(User user) {
         return bookingRepository.findByUserId(user.getId());
     }
 
     private void handleMoreExpensiveModification(
+
             Booking booking,
             double difference
     ) {
+        booking.setStatus(
+                BookingStatus.PENDING_EXTRA_PAYMENT
+        );
+        double roundedDifference = roundPrice(difference);
 
-        booking.setPendingExtraAmount(difference);
+        if (roundedDifference <= 0) {
+            handleSamePriceModification(booking);
+            return;
+        }
+
+        booking.setPendingExtraAmount(roundedDifference);
         booking.setCreditAmount(0.0);
         booking.setCreditPromoCode(null);
         booking.setStatus(BookingStatus.PENDING_EXTRA_PAYMENT);
@@ -388,20 +478,20 @@ public class BookingService {
         PromoCode promo = PromoCode.builder()
                 .code(promoCodeValue)
                 .discountPercentage(0)
-                .fixedAmount(creditAmount)
+                .fixedAmount(roundPrice(creditAmount))
                 .expirationDate(LocalDateTime.now().plusMonths(6))
                 .active(true)
                 .build();
 
         promoRepository.save(promo);
 
-        booking.setCreditAmount(creditAmount);
+        booking.setCreditAmount(roundPrice(creditAmount));
         booking.setCreditPromoCode(promoCodeValue);
 
         sendCreditEmailSafely(
                 booking,
                 promoCodeValue,
-                creditAmount
+                roundPrice(creditAmount)
         );
     }
 
@@ -415,12 +505,18 @@ public class BookingService {
 
     private double calculatePrice(
             Trip trip,
+            String departureCity,
+            String arrivalCity,
             TariffCategory category,
             boolean baby,
             boolean modificationFee
     ) {
 
-        double price = trip.getPrice();
+        double price = calculateBaseSegmentPrice(
+                trip,
+                departureCity,
+                arrivalCity
+        );
 
         price = applyTimeFactor(trip, price);
         price = applyDemandFactor(trip, price);
@@ -434,7 +530,76 @@ public class BookingService {
             price += 20;
         }
 
-        return price;
+        return roundPrice(price);
+    }
+
+    private double calculateBaseSegmentPrice(
+            Trip trip,
+            String departure,
+            String arrival
+    ) {
+
+        List<Stop> stops =
+                stopRepository.findByTripIdOrderByOrderIndex(trip.getId());
+
+        List<String> cities = new ArrayList<>();
+
+        cities.add(trip.getDepartureCity());
+
+        for (Stop stop : stops) {
+            cities.add(stop.getCity());
+        }
+
+        cities.add(trip.getArrivalCity());
+
+        int departureIndex = cities.indexOf(departure);
+        int arrivalIndex = cities.indexOf(arrival);
+
+        if (departureIndex == -1 || arrivalIndex == -1 || departureIndex >= arrivalIndex) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Invalid route segment"
+            );
+        }
+
+        double total = 0;
+
+        for (int i = departureIndex + 1; i <= arrivalIndex; i++) {
+
+            String city = cities.get(i);
+
+            Stop stop = stops.stream()
+                    .filter(s -> s.getCity().equals(city))
+                    .findFirst()
+                    .orElse(null);
+
+            if (stop != null) {
+                total += stop.getSegmentPrice();
+            } else {
+                double remaining =
+                        trip.getPrice()
+                                - stops.stream()
+                                .mapToDouble(Stop::getSegmentPrice)
+                                .sum();
+
+                total += remaining;
+            }
+        }
+
+        return roundPrice(total);
+    }
+
+    private void validateRouteSegment(
+            Trip trip,
+            String departure,
+            String arrival
+    ) {
+
+        calculateBaseSegmentPrice(
+                trip,
+                departure,
+                arrival
+        );
     }
 
     private double applyTariff(double price, TariffCategory category) {
@@ -510,6 +675,10 @@ public class BookingService {
         }
     }
 
+    private double roundPrice(double price) {
+        return Math.round(price * 100.0) / 100.0;
+    }
+
     private void sendModifiedTicketEmailSafely(Booking booking) {
 
         try {
@@ -523,9 +692,9 @@ public class BookingService {
                             " a été modifiée avec succès.\n" +
                             "Votre nouveau ticket PDF est en pièce jointe.\n\n" +
                             "Trajet : " +
-                            booking.getTrip().getDepartureCity() +
+                            booking.getBoardingCity() +
                             " → " +
-                            booking.getTrip().getArrivalCity() +
+                            booking.getDropoffCity() +
                             "\n\nMerci d'utiliser Ma7ta.ma.",
                     pdf
             );
